@@ -20,7 +20,7 @@ To reproduce the experiments of the paper, you can use the following script:
 ```
 python nodeshift.py --data steemit-hardfork-data --feature <struct|text> [--sbert_only]
 ```
-The results will be available in the "results" folder.
+The results will be available in the "results" folder. `steemit-hardfork-data` must be the folder that contains the unzipped files of `steemit-hardfork-data.zip`
 
 ## Interactive Notebook
 The notebook `TGNN-SteemitHardFork.ipynb` contains all the materials to reproduce the experiments on the period affected by the shocking event.
