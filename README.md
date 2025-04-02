@@ -20,7 +20,13 @@ To reproduce the experiments of the paper, you can use the following script:
 ```
 python nodeshift.py --data steemit-hardfork-data --feature <struct|text> [<--sbert_only|--graph_only>]
 ```
-The results will be available in the "results" folder. `steemit-hardfork-data` must be the folder that contains the unzipped files of `steemit-hardfork-data.zip`
+The results will be available in the "results" folder. `steemit-hardfork-data` must be the folder that contains the unzipped files of `steemit-hardfork-data.zip` 
+The options `--sbert_only` and `--graph_only` allow running the experiments related to baselines.
+
+To reproduce the ablation study, you can use the following script:
+```
+python run_ablation.py --data steemith-hardfork-data
+```
 
 ## Interactive Notebook
 The notebook `TGNN-SteemitHardFork.ipynb` contains all the materials to reproduce the experiments on the period affected by the shocking event.
