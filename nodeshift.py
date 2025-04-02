@@ -5,6 +5,7 @@ from torch.nn import CosineSimilarity
 from sklearn.cluster import Birch
 from sklearn.metrics import silhouette_score
 from scipy.stats import iqr
+from scipy.stats import wasserstein_distance
 
 import argparse
 import os
@@ -21,7 +22,7 @@ def load_dataset(folder, feature):
         snapshots.append(snap)
     return snapshots
 
-def cosine_similarity(node_states, hop, feature, textonly):
+def cosine_similarity(node_states, hop, feature, textonly, graphonly):
     cosine = CosineSimilarity(dim=1, eps=1e-6)
 
     label = {
@@ -44,11 +45,22 @@ def cosine_similarity(node_states, hop, feature, textonly):
         #plt.title(f'Similarity between structural node embeddings over time ({hop+1}-hop)')
     if textonly:
         plt.savefig(f'results/cosine_sbert_only.pdf', bbox_inches='tight')
+    elif graphonly:
+        plt.savefig(f'results/cosine_graph_only.pdf', bbox_inches='tight')
     else:
         plt.savefig(f'results/cosine_{feature}_{hop+1}.pdf', bbox_inches='tight')
     plt.clf()
     print("Cosine similarity distributions saved")
     #plt.show()
+
+def distance(node_states):
+    #Valid only for the case-study.
+    cosine = CosineSimilarity(dim=1, eps=1e-6)
+    cosine_sim_1 = cosine(node_states[0][0], node_states[2][0])
+    cosine_sim_2 = cosine(node_states[0][0], node_states[1][0])
+    # Compute Wasserstein Distance
+    w_dist = wasserstein_distance(cosine_sim_1.detach().numpy(), cosine_sim_2.detach().numpy())
+    return w_dist
     
 def create_dir():
     if not os.path.exists('results'):
@@ -61,12 +73,13 @@ def main():
     parser.add_argument('--data', type=str, required=True, help='Dataset folder as a string')
     parser.add_argument('--feature', type=str, choices=['struct', 'text'], required=True, help='Initial node features: structural or textual')
     parser.add_argument('--sbert_only', action='store_true', help='Boolean flag, if set, only SBERT embedding is considered')
+    parser.add_argument('--graph_only', action='store_true', help='Boolean flag, if set, only graph statistics are considered')
     
     # Parse the arguments
     args = parser.parse_args()
     
     print('Loading dataset...')
-    snapshots = load_dataset(args.data, "text" if args.sbert_only else args.feature)
+    snapshots = load_dataset(args.data, "text" if args.sbert_only else "struct" if args.graph_only else args.feature)
     
     print(f'Experiments with {args.data} using {args.feature} feature') 
     
@@ -77,7 +90,8 @@ def main():
         node_states = {k:{} for k in range(len(snapshots))}
         for i in range(len(snapshots)):
             node_states[i][0] = snapshots[i].x
-        cosine_similarity(node_states, hop, "", args.sbert_only)
+        print(f'Distance: {distance(node_states)}')
+        cosine_similarity(node_states, hop, "", args.sbert_only, args.graph_only)
         print('End')
     else:
         device = torch.device('cuda')
@@ -95,10 +109,12 @@ def main():
         print('Training the model...')
         model, node_states = train_roland(snapshots, hidden_conv1, hidden_conv2)
         print('Training finished')
+
+        print(f'Distance: {distance(node_states)}')
         
         print('Computing the cosine similarities...')
         for i in [0,1]:
-            cosine_similarity(node_states, i, args.feature, args.sbert_only)
+            cosine_similarity(node_states, i, args.feature, args.sbert_only, args.graph_only)
               
               
         print('Computing clusters and NMIs...')

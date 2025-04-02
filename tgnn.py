@@ -275,3 +275,272 @@ def train_roland(snapshots, hidden_conv1, hidden_conv2, device='cpu'):
     print(f'LinkPre AVGPR over time: Train {avgpr_train_all}, Test: {avgpr_test_all}')
     
     return roland, node_states
+
+class NOUPD(torch.nn.Module):
+    def __init__(self, input_dim, num_nodes, dropout=0.0, update='mlp', loss=BCEWithLogitsLoss):
+        
+        super(NOUPD, self).__init__()
+        hidden_conv_1 = 64 
+        hidden_conv_2 = 32
+        self.preprocess1 = Linear(input_dim, 256)
+        self.preprocess2 = Linear(256, 128)
+        self.conv1 = GCNConv(128, hidden_conv_1)
+        self.conv2 = GCNConv(hidden_conv_1, hidden_conv_2)
+        self.postprocess1 = Linear(hidden_conv_2, 2)
+        
+        #Initialize the loss function to BCEWithLogitsLoss
+        self.loss_fn = loss()
+
+        self.dropout = dropout
+        self.update = update
+        
+        self.previous_embeddings = None
+                                    
+        
+    def reset_loss(self,loss=BCEWithLogitsLoss):
+        self.loss_fn = loss()
+        
+    def reset_parameters(self):
+        self.preprocess1.reset_parameters()
+        self.preprocess2.reset_parameters()
+        self.conv1.reset_parameters()
+        self.conv2.reset_parameters()
+        self.postprocess1.reset_parameters()
+        
+
+    def forward(self, x, edge_index, edge_label_index=None, isnap=0, previous_embeddings=None):
+        
+        #You do not need all the parameters to be different to None in test phase
+        #You can just use the saved previous embeddings and tau
+        if previous_embeddings is not None and isnap > 0: #None if test
+            self.previous_embeddings = [previous_embeddings[0].clone(),previous_embeddings[1].clone()]
+        
+        current_embeddings = [torch.Tensor([]),torch.Tensor([])]
+        
+        #Preprocess node repr
+        h = self.preprocess1(x)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout,inplace=True)
+        h = self.preprocess2(h)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+        
+        #GRAPHCONV
+        #GraphConv1
+        h = self.conv1(h, edge_index)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+       
+        current_embeddings[0] = h.clone()
+        #GraphConv2
+        h = self.conv2(h, edge_index)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+      
+        current_embeddings[1] = h.clone()
+        
+        #HADAMARD MLP
+        h_src = h[edge_label_index[0]]
+        h_dst = h[edge_label_index[1]]
+        h_hadamard = torch.mul(h_src, h_dst) #hadamard product
+        h = self.postprocess1(h_hadamard)
+        h = torch.sum(h.clone(), dim=-1).clone()
+        
+        #return both 
+        #i)the predictions for the current snapshot 
+        #ii) the embeddings of current snapshot
+
+        return h, current_embeddings
+    
+    def loss(self, pred, link_label):
+        return self.loss_fn(pred, link_label)
+
+class NOGNN(torch.nn.Module):
+    def __init__(self, input_dim, num_nodes, dropout=0.0, update='mlp', loss=BCEWithLogitsLoss):
+        
+        super(NOGNN, self).__init__()
+        #Architecture: 
+            #2 MLP layers to preprocess node repr, 
+            #HadamardMLP as link prediction decoder
+        
+        #You can change the layer dimensions but 
+        #if you change the architecture you need to change the forward method too
+        #TODO: make the architecture parameterizable
+        
+        hidden_conv_1 = 64 
+        hidden_conv_2 = 32
+        self.preprocess1 = Linear(input_dim, 256)
+        self.preprocess2 = Linear(256, 128)
+        self.conv1 = Linear(128, hidden_conv_1)
+        self.conv2 = Linear(hidden_conv_1, hidden_conv_2)
+        self.postprocess1 = Linear(hidden_conv_2, 2)
+        
+        #Initialize the loss function to BCEWithLogitsLoss
+        self.loss_fn = loss()
+
+        self.dropout = dropout
+        self.update = update
+        
+        self.tau0 = torch.nn.Parameter(torch.Tensor([0.2]))
+        if update=='gru':
+            self.gru1 = GRUCell(hidden_conv_1, hidden_conv_1)
+            self.gru2 = GRUCell(hidden_conv_2, hidden_conv_2)
+        elif update=='mlp':
+            self.mlp1 = Linear(hidden_conv_1*2, hidden_conv_1)
+            self.mlp2 = Linear(hidden_conv_2*2, hidden_conv_2)
+        self.previous_embeddings = None
+                                    
+        
+    def reset_loss(self,loss=BCEWithLogitsLoss):
+        self.loss_fn = loss()
+        
+    def reset_parameters(self):
+        self.preprocess1.reset_parameters()
+        self.preprocess2.reset_parameters()
+        self.conv1.reset_parameters()
+        self.conv2.reset_parameters()
+        self.postprocess1.reset_parameters()
+        
+
+    def forward(self, x, edge_index, edge_label_index=None, isnap=0, previous_embeddings=None):
+        
+        #You do not need all the parameters to be different to None in test phase
+        #You can just use the saved previous embeddings and tau
+        if previous_embeddings is not None and isnap > 0: #None if test
+            self.previous_embeddings = [previous_embeddings[0].clone(),previous_embeddings[1].clone()]
+        
+        current_embeddings = [torch.Tensor([]),torch.Tensor([])]
+        
+        #Preprocess node repr
+        h = self.preprocess1(x)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout,inplace=True)
+        h = self.preprocess2(h)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+        
+        #GRAPHCONV
+        #GraphConv1
+        h = self.conv1(h)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+        #Embedding Update after first layer
+        if isnap > 0:
+            if self.update=='gru':
+                h = torch.Tensor(self.gru1(h, self.previous_embeddings[0].clone()).detach().numpy())
+            elif self.update=='mlp':
+                hin = torch.cat((h,self.previous_embeddings[0].clone()),dim=1)
+                h = torch.Tensor(self.mlp1(hin).detach().numpy())
+            else:
+                h = torch.Tensor((self.tau0 * self.previous_embeddings[0].clone() + (1-self.tau0) * h.clone()).detach().numpy())
+       
+        current_embeddings[0] = h.clone()
+        #GraphConv2
+        h = self.conv2(h)
+        h = h.relu()
+        h = F.dropout(h, p=self.dropout, inplace=True)
+        #Embedding Update after second layer
+        if isnap > 0:
+            if self.update=='gru':
+                h = torch.Tensor(self.gru2(h, self.previous_embeddings[1].clone()).detach().numpy())
+            elif self.update=='mlp':
+                hin = torch.cat((h,self.previous_embeddings[1].clone()),dim=1)
+                h = torch.Tensor(self.mlp2(hin).detach().numpy())
+            else:
+                h = torch.Tensor((self.tau0 * self.previous_embeddings[1].clone() + (1-self.tau0) * h.clone()).detach().numpy())
+      
+        current_embeddings[1] = h.clone()
+        
+        #HADAMARD MLP
+        h_src = h[edge_label_index[0]]
+        h_dst = h[edge_label_index[1]]
+        h_hadamard = torch.mul(h_src, h_dst) #hadamard product
+        h = self.postprocess1(h_hadamard)
+        h = torch.sum(h.clone(), dim=-1).clone()
+        
+        #return both 
+        #i)the predictions for the current snapshot 
+        #ii) the embeddings of current snapshot
+
+        return h, current_embeddings
+    
+    def tau(self):
+        if self.update=='lwa':
+            return self.tau0
+        raise Exception('update!=lwa')
+    
+    def loss(self, pred, link_label):
+        return self.loss_fn(pred, link_label)
+
+ablation_model = {
+    'w/o UPDATE': NOUPD,
+    'w/o GNN': NOGNN, 
+    'w/o current-features': ROLANDLP, 
+    'w/o current-topology': ROLANDLP
+}
+
+def train_roland_ablation(snapshots, hidden_conv1, hidden_conv2, ablation, device='cpu'):
+    num_snap = len(snapshots)
+    input_channels = snapshots[0].x.size(1)
+    num_nodes = snapshots[0].x.size(0)
+    last_embeddings = [torch.Tensor([[0 for i in range(hidden_conv1)] for j in range(num_nodes)]),\
+                                    torch.Tensor([[0 for i in range(hidden_conv2)] for j in range(num_nodes)])]
+    avgpr_train_singles = []
+    avgpr_test_singles = []
+    mrr_train_singles = []
+    mrr_test_singles = []
+
+
+    roland = ablation_model[ablation](input_channels, num_nodes, update='mlp' if ablation=='w/o GNN' else 'gru')
+    rolopt = torch.optim.Adam(params=roland.parameters(), lr=0.01, weight_decay = 5e-3)
+    roland.reset_parameters()
+
+    if ablation=='w/o current-features':
+        #snapshots[2] --> M3 in the paper
+        node_feature_matrix = snapshots[2].x.clone()
+        snapshots[2].x = torch.ones(node_feature_matrix.shape[0], node_feature_matrix.shape[1])
+    
+    node_states = {}
+    
+    for i in range(num_snap-1):
+        #CREATE TRAIN + VAL + TEST SET FOR THE CURRENT SNAP
+        snapshot = copy.deepcopy(snapshots[i])
+        num_current_edges = len(snapshot.edge_index[0])
+        transform = RandomLinkSplit(num_val=0.0,num_test=0.25)
+        train_data, _, val_data = transform(snapshot)
+        if ablation == 'w/o current-topology' and i==2:
+            train_data.edge_index = torch.Tensor([[],[]]).long()
+        test_data = copy.deepcopy(snapshots[i+1])
+        future_neg_edge_index = negative_sampling(
+            edge_index=test_data.edge_index, #positive edges
+            num_nodes=test_data.num_nodes, # number of nodes
+            num_neg_samples=test_data.edge_index.size(1)) # number of neg_sample equal to number of pos_edges
+        #edge index ok, edge_label concat, edge_label_index concat
+        num_pos_edge = test_data.edge_index.size(1)
+        test_data.edge_label = torch.Tensor(np.array([1 for i in range(num_pos_edge)] + [0 for i in range(num_pos_edge)]))
+        test_data.edge_label_index = torch.cat([test_data.edge_index, future_neg_edge_index], dim=-1)
+
+        
+        #TRAIN AND TEST THE MODEL FOR THE CURRENT SNAP
+        roland, rolopt, avgpr_train, avgpr_test, last_embeddings =\
+            train_single_snapshot(roland, snapshot, train_data, val_data, test_data, i,\
+                                  last_embeddings, rolopt)
+        
+        node_states[i] = last_embeddings
+        
+        
+        #SAVE AND DISPLAY EVALUATION
+        print(f'Snapshot: {i}\n\tLinkPre AVGPR Train: {avgpr_train}, Test: {avgpr_test}')
+        avgpr_train_singles.append(avgpr_train)
+        avgpr_test_singles.append(avgpr_test)
+        
+    avgpr_train_all = sum(avgpr_train_singles)/len(avgpr_train_singles)
+    avgpr_test_all = sum(avgpr_test_singles)/len(avgpr_test_singles)
+    
+    #obtain the node embeddings on the last snapshot (test_data at i=3)
+    _, last_embeddings = roland(test_data.x, test_data.edge_index, test_data.edge_label_index, num_snap-1, last_embeddings)
+    node_states[num_snap-1] = last_embeddings
+    
+    print(f'LinkPre AVGPR over time: Train {avgpr_train_all}, Test: {avgpr_test_all}')
+    
+    return roland, node_states

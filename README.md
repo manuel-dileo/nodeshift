@@ -18,7 +18,7 @@ Data related to the period affected by the shocking event are available in this 
 
 To reproduce the experiments of the paper, you can use the following script:
 ```
-python nodeshift.py --data steemit-hardfork-data --feature <struct|text> [--sbert_only]
+python nodeshift.py --data steemit-hardfork-data --feature <struct|text> [<--sbert_only|--graph_only>]
 ```
 The results will be available in the "results" folder. `steemit-hardfork-data` must be the folder that contains the unzipped files of `steemit-hardfork-data.zip`
 
