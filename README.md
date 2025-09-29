@@ -4,7 +4,7 @@ Use of Temporal Graph Neural Networks to analyze how users behave before, during
 
 The case study is a user migration from Steemit, the most well-known Blockchain-based OSN, to Hive, due to an hard-fork event.
 
-This repository contains information, data and code behind the work: SUBMITTED.
+This repository contains information, data and code behind the work: User migration in blockchain-based online social networks through the lens of temporal node representation shift, accepted at Machine Learning
 
 
 # Dataset
